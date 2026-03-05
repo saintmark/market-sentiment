@@ -8,7 +8,7 @@
 import os
 import json
 import sqlite3
-from flask import Flask, render_template_string, jsonify, abort
+from flask import Flask, render_template_string, jsonify, abort, request
 from pathlib import Path
 from datetime import datetime
 
@@ -30,7 +30,14 @@ HTML_TEMPLATE = """
         .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.5rem; text-align: center; }
         .header h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
         .header p { font-size: 0.875rem; opacity: 0.9; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+        .layout { display: flex; max-width: 1400px; margin: 0 auto; padding: 1rem; gap: 1rem; }
+        .sidebar { width: 200px; flex-shrink: 0; }
+        .sidebar-card { background: white; border-radius: 6px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1rem; }
+        .sidebar-title { font-size: 0.875rem; font-weight: 600; color: #333; margin-bottom: 0.75rem; }
+        .source-filter { display: block; padding: 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.875rem; color: #666; text-decoration: none; transition: all 0.2s; }
+        .source-filter:hover { background: #f0f0f0; }
+        .source-filter.active { background: #e6f7ff; color: #1890ff; font-weight: 500; }
+        .main { flex: 1; min-width: 0; }
         .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1rem; }
         .stat { background: white; padding: 1rem; border-radius: 6px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .stat h3 { font-size: 0.75rem; color: #666; margin-bottom: 0.25rem; }
@@ -54,6 +61,10 @@ HTML_TEMPLATE = """
         .tag-neu { background: #f5f5f5; color: #666; }
         .tag-sec { background: #e6f7ff; color: #1890ff; }
         .refresh { position: fixed; bottom: 1rem; right: 1rem; background: #1890ff; color: white; border: none; padding: 0.75rem 1rem; border-radius: 50px; cursor: pointer; }
+        @media (max-width: 768px) {
+            .layout { flex-direction: column; }
+            .sidebar { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -61,39 +72,50 @@ HTML_TEMPLATE = """
         <h1>📊 市场情绪分析</h1>
         <p>基于 AI 的新闻情感分析与市场情绪监测</p>
     </header>
-    <main class="container">
-        <div class="stats">
-            <div class="stat"><h3>新闻总数</h3><div class="val">{{ stats.total }}</div></div>
-            <div class="stat"><h3>平均情感</h3><div class="val {{ 'pos' if stats.avg > 0.3 else 'neg' if stats.avg < -0.3 else '' }}">{{ "%.2f" | format(stats.avg) }}</div></div>
-            <div class="stat"><h3>正面</h3><div class="val pos">{{ stats.pos }}</div></div>
-            <div class="stat"><h3>负面</h3><div class="val neg">{{ stats.neg }}</div></div>
-        </div>
-        
-        <div class="sector-grid">
-            {% for s in sectors %}
-            <div class="sector">
-                <div class="name">{{ s.name }}</div>
-                <div class="score" style="color: {{ '#52c41a' if s.score > 0.3 else '#f5222d' if s.score < -0.3 else '#999' }}">{{ "%.2f" | format(s.score) }}</div>
-                <div class="count">{{ s.count }}条</div>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="sidebar-card">
+                <div class="sidebar-title">📰 消息来源</div>
+                <a href="/" class="source-filter {{ 'active' if not current_source }}">全部来源 ({{ total_count }})</a>
+                {% for s in sources %}
+                <a href="/?source={{ s.name }}" class="source-filter {{ 'active' if current_source == s.name }}">{{ s.name }} ({{ s.count }})</a>
+                {% endfor %}
             </div>
-            {% endfor %}
-        </div>
-        
-        <div class="news-list">
-            {% for n in news %}
-            <div class="news-item">
-                <a href="/news/{{ n.id }}" class="news-title">{{ n.title }}</a>
-                <div class="news-meta">
-                    <span class="tag tag-sec">{{ n.source }}</span>
-                    {% if n.sector %}<span class="tag tag-sec">{{ n.sector }}</span>{% endif %}
-                    <span class="tag tag-{{ 'pos' if n.label == 'positive' else 'neg' if n.label == 'negative' else 'neu' }}">{{ '正面' if n.label == 'positive' else '负面' if n.label == 'negative' else '中性' }}</span>
-                    {% if n.score != 0 %}<span>{{ "%.2f" | format(n.score) }}</span>{% endif %}
-                    <span style="color:#999;font-size:0.75rem;">{{ n.published_at[:10] }}</span>
+        </aside>
+        <main class="main">
+            <div class="stats">
+                <div class="stat"><h3>新闻总数</h3><div class="val">{{ stats.total }}</div></div>
+                <div class="stat"><h3>平均情感</h3><div class="val {{ 'pos' if stats.avg > 0.3 else 'neg' if stats.avg < -0.3 else '' }}">{{ "%.2f" | format(stats.avg) }}</div></div>
+                <div class="stat"><h3>正面</h3><div class="val pos">{{ stats.pos }}</div></div>
+                <div class="stat"><h3>负面</h3><div class="val neg">{{ stats.neg }}</div></div>
+            </div>
+            
+            <div class="sector-grid">
+                {% for s in sectors %}
+                <div class="sector">
+                    <div class="name">{{ s.name }}</div>
+                    <div class="score" style="color: {{ '#52c41a' if s.score > 0.3 else '#f5222d' if s.score < -0.3 else '#999' }}">{{ "%.2f" | format(s.score) }}</div>
+                    <div class="count">{{ s.count }}条</div>
                 </div>
+                {% endfor %}
             </div>
-            {% endfor %}
-        </div>
-    </main>
+            
+            <div class="news-list">
+                {% for n in news %}
+                <div class="news-item">
+                    <a href="/news/{{ n.id }}" class="news-title">{{ n.title }}</a>
+                    <div class="news-meta">
+                        <span class="tag tag-sec">{{ n.source }}</span>
+                        {% if n.sector %}<span class="tag tag-sec">{{ n.sector }}</span>{% endif %}
+                        <span class="tag tag-{{ 'pos' if n.label == 'positive' else 'neg' if n.label == 'negative' else 'neu' }}">{{ '正面' if n.label == 'positive' else '负面' if n.label == 'negative' else '中性' }}</span>
+                        {% if n.score != 0 %}<span>{{ "%.2f" | format(n.score) }}</span>{% endif %}
+                        <span style="color:#999;font-size:0.75rem;">{{ n.published_at[:10] }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </main>
+    </div>
     <button class="refresh" onclick="location.reload()">🔄</button>
 </body>
 </html>
@@ -163,34 +185,60 @@ def get_db():
 def index():
     conn = get_db()
     
-    # 统计数据
-    r = conn.execute("""
+    # 获取筛选参数
+    source_filter = request.args.get('source', '')
+    
+    # 统计数据（支持筛选）
+    where_clause = "WHERE source = ?" if source_filter else ""
+    params = (source_filter,) if source_filter else ()
+    
+    r = conn.execute(f"""
         SELECT COUNT(*) as total, AVG(sentiment_score) as avg,
                SUM(CASE WHEN sentiment_label='positive' THEN 1 ELSE 0 END) as pos,
                SUM(CASE WHEN sentiment_label='negative' THEN 1 ELSE 0 END) as neg
-        FROM news
-    """).fetchone()
+        FROM news {where_clause}
+    """, params).fetchone()
     stats = {"total": r[0] or 0, "avg": r[1] or 0, "pos": r[2] or 0, "neg": r[3] or 0}
     
-    # 行业统计（限制数量）
+    # 来源列表（用于侧边栏）
+    sources = []
+    for row in conn.execute("SELECT source, COUNT(*) as cnt FROM news GROUP BY source ORDER BY cnt DESC"):
+        sources.append({"name": row[0], "count": row[1]})
+    
+    total_count = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
+    
+    # 行业统计
+    sector_where = "AND source = ?" if source_filter else ""
+    sector_params = (source_filter,) if source_filter else ()
     sectors = []
-    for row in conn.execute("""
+    for row in conn.execute(f"""
         SELECT sector, COUNT(*) as cnt, AVG(sentiment_score) as score
-        FROM news WHERE analyzed=1 AND sector IS NOT NULL AND sector!='' AND sector!='综合'
+        FROM news WHERE analyzed=1 AND sector IS NOT NULL AND sector!='' AND sector!='综合' {sector_where}
         GROUP BY sector ORDER BY cnt DESC LIMIT 8
-    """):
+    """, sector_params):
         sectors.append({"name": row[0], "count": row[1], "score": round(row[2], 2)})
     
-    # 最新新闻（限制20条，让更多来源显示）
+    # 最新新闻（支持筛选）
+    news_where = "WHERE source = ?" if source_filter else ""
+    news_params = (source_filter,) if source_filter else ()
     news = []
-    for row in conn.execute("SELECT id, title, content, url, source, published_at, sentiment_score, sentiment_label, sector FROM news ORDER BY published_at DESC LIMIT 20"):
+    for row in conn.execute(f"""
+        SELECT id, title, content, url, source, published_at, sentiment_score, sentiment_label, sector 
+        FROM news {news_where} ORDER BY published_at DESC LIMIT 20
+    """, news_params):
         news.append({
             "id": row[0], "title": row[1], "content": row[2], "url": row[3],
             "source": row[4], "published_at": row[5], "score": row[6], "label": row[7], "sector": row[8]
         })
     conn.close()
     
-    return render_template_string(HTML_TEMPLATE, stats=stats, sectors=sectors, news=news)
+    return render_template_string(HTML_TEMPLATE, 
+                                  stats=stats, 
+                                  sources=sources, 
+                                  total_count=total_count,
+                                  sectors=sectors, 
+                                  news=news,
+                                  current_source=source_filter)
 
 @app.route('/news/<int:nid>')
 def detail(nid):
