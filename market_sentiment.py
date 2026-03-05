@@ -247,11 +247,27 @@ class Collector:
             return []
     
     def _parse_date(self, date_str: str) -> datetime:
-        """解析日期字符串"""
-        try:
-            return datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
-        except:
+        """解析日期字符串 - 支持多种 RSS 格式"""
+        if not date_str:
             return datetime.now()
+        
+        # 尝试多种日期格式
+        formats = [
+            "%a, %d %b %Y %H:%M:%S",      # RFC 2822: Thu, 05 Mar 2026 09:24:26
+            "%Y-%m-%d %H:%M:%S",           # ISO: 2026-03-05 17:07:14
+            "%Y-%m-%dT%H:%M:%S",           # ISO8601: 2026-03-05T17:07:14
+        ]
+        
+        for fmt in formats:
+            try:
+                # 去掉时区信息尝试解析
+                clean_str = date_str.split('+')[0].split('GMT')[0].strip()[:25]
+                return datetime.strptime(clean_str, fmt)
+            except:
+                continue
+        
+        # 都失败了返回当前时间
+        return datetime.now()
     
     def run(self):
         """运行采集"""

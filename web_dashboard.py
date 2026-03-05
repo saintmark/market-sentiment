@@ -88,6 +88,7 @@ HTML_TEMPLATE = """
                     {% if n.sector %}<span class="tag tag-sec">{{ n.sector }}</span>{% endif %}
                     <span class="tag tag-{{ 'pos' if n.label == 'positive' else 'neg' if n.label == 'negative' else 'neu' }}">{{ '正面' if n.label == 'positive' else '负面' if n.label == 'negative' else '中性' }}</span>
                     {% if n.score != 0 %}<span>{{ "%.2f" | format(n.score) }}</span>{% endif %}
+                    <span style="color:#999;font-size:0.75rem;">{{ n.published_at[:10] }}</span>
                 </div>
             </div>
             {% endfor %}
@@ -182,10 +183,10 @@ def index():
     
     # 最新新闻（限制10条）
     news = []
-    for row in conn.execute("SELECT * FROM news ORDER BY published_at DESC LIMIT 10"):
+    for row in conn.execute("SELECT id, title, content, url, source, published_at, sentiment_score, sentiment_label, sector FROM news ORDER BY published_at DESC LIMIT 10"):
         news.append({
-            "id": row[0], "title": row[1], "content": row[2],
-            "source": row[4], "sector": row[10], "label": row[7], "score": row[6]
+            "id": row[0], "title": row[1], "content": row[2], "url": row[3],
+            "source": row[4], "published_at": row[5], "score": row[6], "label": row[7], "sector": row[8]
         })
     conn.close()
     
