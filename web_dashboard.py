@@ -181,9 +181,9 @@ def index():
     """):
         sectors.append({"name": row[0], "count": row[1], "score": round(row[2], 2)})
     
-    # 最新新闻（限制10条）
+    # 最新新闻（限制20条，让更多来源显示）
     news = []
-    for row in conn.execute("SELECT id, title, content, url, source, published_at, sentiment_score, sentiment_label, sector FROM news ORDER BY published_at DESC LIMIT 10"):
+    for row in conn.execute("SELECT id, title, content, url, source, published_at, sentiment_score, sentiment_label, sector FROM news ORDER BY published_at DESC LIMIT 20"):
         news.append({
             "id": row[0], "title": row[1], "content": row[2], "url": row[3],
             "source": row[4], "published_at": row[5], "score": row[6], "label": row[7], "sector": row[8]
