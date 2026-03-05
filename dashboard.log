@@ -1,0 +1,9 @@
+🚀 Dashboard on http://localhost:8080
+ * Serving Flask app 'web_dashboard'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8080
+ * Running on http://10.188.172.209:8080
+Press CTRL+C to quit
+127.0.0.1 - - [05/Mar/2026 12:31:36] "GET /health HTTP/1.1" 200 -

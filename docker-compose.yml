@@ -1,0 +1,471 @@
+version: '3.8'
+
+# ============================================================
+# 市场情绪分析系统 - Docker Compose 配置
+# Market Sentiment Analysis System
+# ============================================================
+
+services:
+  # ==========================================================
+  # PostgreSQL - 主数据库
+  # ==========================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: ms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./logs/postgres:/var/log/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-market_sentiment}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ==========================================================
+  # Redis - 缓存和消息队列
+  # ==========================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ms-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ==========================================================
+  # Zookeeper - Kafka 依赖
+  # ==========================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: ms-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_PORT:-2181}
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - ms-network
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================
+  # Kafka - 消息流处理
+  # ==========================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ms-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_PORT:-2181}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_PORT:-9092}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ==========================================================
+  # Kafka UI - 管理和监控界面
+  # ==========================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ms-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:${ZOOKEEPER_PORT:-2181}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - ms-network
+    profiles:
+      - dev
+      - debug
+
+  # ==========================================================
+  # ClickHouse - 时序数据分析
+  # ==========================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8-alpine
+    container_name: ms-clickhouse
+    restart: unless-stopped
+    ports:
+      - "${CLICKHOUSE_PORT:-8123}:8123"  # HTTP
+      - "9000:9000"                      # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./config/clickhouse.xml:/etc/clickhouse-server/config.d/custom.xml:ro
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-market_sentiment}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ==========================================================
+  # 数据采集服务 (Data Collector)
+  # ==========================================================
+  collector:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile
+    container_name: ms-collector
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # 数据库配置
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-20}
+      # Kafka 配置
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:29092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC_RAW:-raw-news}
+      # 采集配置
+      RSS_FEED_URL: ${RSS_FEED_URL:-https://36kr.com/feed}
+      COLLECT_INTERVAL: ${COLLECT_INTERVAL:-300}
+      COLLECT_TIMEOUT: ${COLLECT_TIMEOUT:-30}
+      COLLECT_RETRY_COUNT: ${COLLECT_RETRY_COUNT:-3}
+      # 日志
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_JSON_FORMAT: ${LOG_JSON_FORMAT:-true}
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ==========================================================
+  # NLP 情感分析服务
+  # ==========================================================
+  nlp:
+    build:
+      context: ./services/nlp
+      dockerfile: Dockerfile
+    container_name: ms-nlp
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      # AI API 配置
+      KIMI_API_KEY: ${KIMI_API_KEY}
+      KIMI_API_URL: ${KIMI_API_URL:-https://api.moonshot.cn/v1}
+      NLP_MODEL: ${NLP_MODEL:-moonshot-v1-8k}
+      # Kafka 配置
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:29092}
+      KAFKA_INPUT_TOPIC: ${KAFKA_TOPIC_RAW:-raw-news}
+      KAFKA_OUTPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT:-sentiment-news}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-nlp-processor}
+      # 数据库配置
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      # 处理配置
+      NLP_BATCH_SIZE: ${NLP_BATCH_SIZE:-10}
+      NLP_MAX_RETRIES: ${NLP_MAX_RETRIES:-3}
+      NLP_RETRY_DELAY: ${NLP_RETRY_DELAY:-2}
+      # 日志
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ==========================================================
+  # 聚合服务 (Aggregator)
+  # ==========================================================
+  aggregator:
+    build:
+      context: ./services/aggregator
+      dockerfile: Dockerfile
+    container_name: ms-aggregator
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      # Kafka 配置
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:29092}
+      KAFKA_INPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT:-sentiment-news}
+      KAFKA_CONSUMER_GROUP: aggregator-group
+      # ClickHouse 配置
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-clickhouse}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-market_sentiment}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      # PostgreSQL 配置
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      # 聚合配置
+      AGGREGATION_WINDOW_HOURS: ${AGGREGATION_WINDOW_HOURS:-24}
+      AGGREGATION_INTERVAL_MINUTES: ${AGGREGATION_INTERVAL_MINUTES:-60}
+      # 日志
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ==========================================================
+  # 定时任务服务 (Scheduler)
+  # ==========================================================
+  scheduler:
+    build:
+      context: ./services/scheduler
+      dockerfile: Dockerfile
+    container_name: ms-scheduler
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 数据库配置
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      # Redis 配置
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      # 定时任务配置
+      DAILY_REPORT_TIME: ${DAILY_REPORT_TIME:-08:00}
+      CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-0 2 * * *}
+      COLLECTOR_API_URL: http://collector:8080
+      # 数据保留
+      RAW_DATA_RETENTION_DAYS: ${RAW_DATA_RETENTION_DAYS:-90}
+      AGGREGATED_DATA_RETENTION_DAYS: ${AGGREGATED_DATA_RETENTION_DAYS:-365}
+      # 日志
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ==========================================================
+  # API 网关服务 (API Gateway)
+  # ==========================================================
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: ms-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 数据库配置
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-market_sentiment}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-20}
+      DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-5}
+      # ClickHouse 配置
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-clickhouse}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-market_sentiment}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      # Redis 配置
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # API 配置
+      API_PORT: 8000
+      API_HOST: 0.0.0.0
+      API_WORKERS: ${API_WORKERS:-4}
+      LOG_LEVEL: ${API_LOG_LEVEL:-info}
+      # 安全配置
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
+      API_KEY: ${API_KEY:-internal-api-key}
+      # 应用配置
+      APP_ENV: ${APP_ENV:-production}
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ==========================================================
+  # Web 前端 (Web Frontend)
+  # ==========================================================
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: ms-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: ${WEB_API_URL:-http://localhost:8000}
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+    networks:
+      - ms-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+# ============================================================
+# 数据卷定义
+# ============================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
+    driver: local
+  kafka_data:
+    driver: local
+
+# ============================================================
+# 网络定义
+# ============================================================
+networks:
+  ms-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16

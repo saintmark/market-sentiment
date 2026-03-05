@@ -1,0 +1,52 @@
+.trends-page h2 {
+  margin-bottom: 1.5rem;
+  color: #333;
+}
+
+.trends-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.days-selector {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.days-selector button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #d9d9d9;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.days-selector button:hover {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+
+.days-selector button.active {
+  background: #1890ff;
+  color: white;
+  border-color: #1890ff;
+}
+
+.chart-container {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.chart-container h3 {
+  margin: 1.5rem 0 1rem;
+  color: #333;
+}
+
+.chart-container h3:first-child {
+  margin-top: 0;
+}
