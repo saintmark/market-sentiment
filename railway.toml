@@ -1,8 +1,0 @@
-[build]
-builder = "nixpacks"
-
-[deploy]
-startCommand = "python3 web_dashboard.py"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
-restartPolicyType = "ON_FAILURE"
