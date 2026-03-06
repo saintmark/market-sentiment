@@ -218,17 +218,33 @@ class Collector:
     
     def __init__(self, db: Database):
         self.db = db
+        # 混合使用国内和国际 RSS 源，提高可靠性
         self.feeds = [
+            # 国内源（可能从海外访问受限）
             {"name": "36氪", "url": "https://36kr.com/feed"},
             {"name": "IT之家", "url": "https://www.ithome.com/rss"},
             {"name": "Solidot", "url": "https://www.solidot.org/index.rss"},
+            # 国际源（适合海外服务器）
+            {"name": "TechCrunch", "url": "https://techcrunch.com/feed/"},
+            {"name": "Ars Technica", "url": "http://feeds.arstechnica.com/arstechnica/index"},
+            {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
         ]
     
     def fetch_rss(self, feed_url: str, source_name: str) -> List[Dict]:
         """抓取 RSS 源"""
         try:
             print(f"正在抓取: {source_name} ({feed_url})")
-            feed = feedparser.parse(feed_url)
+            
+            # 使用 requests 添加超时和 User-Agent
+            import requests
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            response = requests.get(feed_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # 使用 feedparser 解析内容
+            feed = feedparser.parse(response.content)
             
             news_list = []
             for entry in feed.entries[:20]:  # 只取前20条
@@ -242,6 +258,12 @@ class Collector:
                 news_list.append(news)
             
             return news_list
+        except requests.Timeout:
+            print(f"抓取 {source_name} 超时")
+            return []
+        except requests.RequestException as e:
+            print(f"抓取 {source_name} 网络错误: {e}")
+            return []
         except Exception as e:
             print(f"抓取 {source_name} 失败: {e}")
             return []
