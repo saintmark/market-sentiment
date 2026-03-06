@@ -19,8 +19,8 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
-# 配置
-DB_PATH = Path("./market_sentiment.db")
+# 配置 - 优先使用 Railway Volume 路径
+DB_PATH = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", ".")) / "market_sentiment.db"
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
 KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions"
 
